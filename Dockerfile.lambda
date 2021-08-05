@@ -1,0 +1,60 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Define global args
+ARG APP_DIR=/opt/app
+ARG APP_USER=appuser
+ARG APP_GROUP=appgroup
+
+# Stage 1: Build image for function
+FROM public.ecr.aws/bitnami/ruby:3.0 AS build-image
+
+ARG APP_DIR
+
+# Update package
+RUN apt-get -y update && apt-get -y upgrade
+
+# Install bundler
+RUN gem install -N bundler:2.2.19
+
+# Set working directory
+RUN mkdir -p $APP_DIR
+WORKDIR ${APP_DIR}
+
+# Install app dependencies
+COPY Gemfile Gemfile.lock ${APP_DIR}/
+RUN bundle config set --local path vendor/bundle && bundle install
+
+# Copy function code
+COPY function.rb ${APP_DIR}/
+COPY lib ${APP_DIR}/lib
+
+# Stage 2: Final runtime image
+FROM public.ecr.aws/bitnami/ruby:3.0-prod
+
+# Include global arg in this stage of the build
+ARG APP_DIR
+ARG APP_USER
+ARG APP_GROUP
+
+# Update package
+RUN apt-get -y update && apt-get -y upgrade
+
+# Create an app user to run application
+RUN addgroup $APP_GROUP && \
+    adduser --disabled-login --ingroup $APP_GROUP $APP_USER && \
+    mkdir $APP_DIR && \
+    chown $APP_USER:$APP_GROUP $APP_DIR
+
+# Install lambda runtime interface client
+RUN gem install aws_lambda_ric
+
+# Set user
+WORKDIR ${APP_DIR}
+USER $APP_USER
+
+# Copy in the built dependencies
+COPY --chown=$APP_USER:$APP_GROUP --from=build-image ${APP_DIR} ${APP_DIR}
+
+ENTRYPOINT ["aws_lambda_ric"]
+CMD [ "function.Billing::InvoiceGenerator.process" ]
